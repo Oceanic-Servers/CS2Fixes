@@ -1,6 +1,7 @@
-# CS2Fixes
+# CS2Fixes - adapted for Oceanic Servers Jailbreak
 
 CS2Fixes is a Metamod plugin with fixes and features aimed but not limited to zombie escape. This project also serves as a good example and help for source2mod and other developers.
+This has been adapted for Oceanic Servers to remove some detouring conflicts that are shared between CSS and CS2Fixes.
 
 ## Installation
 
