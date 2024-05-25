@@ -169,7 +169,6 @@ public:
 
 	void TakeDamage(CTakeDamageInfo &info)
 	{
-		Detour_CBaseEntity_TakeDamageOld(this, &info);
 	}
 
 	void Teleport(const Vector *position, const QAngle *angles, const Vector *velocity)
