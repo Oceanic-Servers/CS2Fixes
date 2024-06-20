@@ -36,6 +36,7 @@
 #include "entity/ctriggerpush.h"
 #include "entity/cgamerules.h"
 #include "entity/ctakedamageinfo.h"
+#include "entity/cenvmessage.h"
 #include "entity/services.h"
 #include "playermanager.h"
 #include "igameevents.h"
@@ -44,6 +45,7 @@
 #include "customio.h"
 #include "entities.h"
 #include "serversideclient.h"
+#include "recipientfilters.h"
 #include "networksystem/inetworkserializer.h"
 #include "map_votes.h"
 #include "tier0/vprof.h"
@@ -323,6 +325,23 @@ bool FASTCALL Detour_CEntityIdentity_AcceptInput(CEntityIdentity* pThis, CUtlSym
 
 	if (g_bEnableZR)
 		ZR_Detour_CEntityIdentity_AcceptInput(pThis, pInputName, pActivator, pCaller, value, nOutputID);
+
+	// Special case for ShowMessage.
+	if (!V_strnicmp(pInputName->String(), "ShowMessage", 11))
+	{
+		CMessage* pEnvMessage = reinterpret_cast<CMessage*>(pThis->m_pInstance);
+		CCSPlayerPawn* pPawn = reinterpret_cast<CCSPlayerPawn*>(pActivator);
+
+		if (pPawn->IsPawn())
+		{
+			CCSPlayerController* pController = pPawn->GetOriginalController();
+			if (pController->IsController())
+			{
+				ClientPrint(pController, HUD_PRINTCENTER, pEnvMessage->m_iszMessage);
+			}
+		}
+		return true;
+	}
 
 	// Handle KeyValue(s)
 	if (!V_strnicmp(pInputName->String(), "KeyValue", 8))
