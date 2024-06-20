@@ -36,6 +36,7 @@
 #include "entity/ctriggerpush.h"
 #include "entity/cgamerules.h"
 #include "entity/ctakedamageinfo.h"
+#include "entity/cenvmessage.h"
 #include "entity/services.h"
 #include "playermanager.h"
 #include "igameevents.h"
@@ -44,6 +45,7 @@
 #include "customio.h"
 #include "entities.h"
 #include "serversideclient.h"
+#include "recipientfilters.h"
 #include "networksystem/inetworkserializer.h"
 #include "map_votes.h"
 #include "tier0/vprof.h"
@@ -73,6 +75,7 @@ DECLARE_DETOUR(CGamePlayerEquip_InputTriggerForAllPlayers, Detour_CGamePlayerEqu
 DECLARE_DETOUR(CGamePlayerEquip_InputTriggerForActivatedPlayer, Detour_CGamePlayerEquip_InputTriggerForActivatedPlayer);
 DECLARE_DETOUR(CCSGameRules_GoToIntermission, Detour_CCSGameRules_GoToIntermission);
 DECLARE_DETOUR(GetFreeClient, Detour_GetFreeClient);
+DECLARE_DETOUR(CCSPlayerPawn_GetMaxSpeed, Detour_CCSPlayerPawn_GetMaxSpeed);
 
 void FASTCALL Detour_CGameRules_Constructor(CGameRules *pThis)
 {
@@ -324,6 +327,23 @@ bool FASTCALL Detour_CEntityIdentity_AcceptInput(CEntityIdentity* pThis, CUtlSym
 	if (g_bEnableZR)
 		ZR_Detour_CEntityIdentity_AcceptInput(pThis, pInputName, pActivator, pCaller, value, nOutputID);
 
+	// Special case for ShowMessage.
+	if (!V_strnicmp(pInputName->String(), "ShowMessage", 11))
+	{
+		CMessage* pEnvMessage = reinterpret_cast<CMessage*>(pThis->m_pInstance);
+		CCSPlayerPawn* pPawn = reinterpret_cast<CCSPlayerPawn*>(pActivator);
+
+		if (pPawn->IsPawn())
+		{
+			CCSPlayerController* pController = pPawn->GetOriginalController();
+			if (pController->IsController())
+			{
+				ClientPrint(pController, HUD_PRINTCENTER, pEnvMessage->m_iszMessage);
+			}
+		}
+		return true;
+	}
+
 	// Handle KeyValue(s)
 	if (!V_strnicmp(pInputName->String(), "KeyValue", 8))
 	{
@@ -492,6 +512,19 @@ CServerSideClient* FASTCALL Detour_GetFreeClient(int64_t unk1, const __m128i* un
 
 	// Server is actually full for real
 	return nullptr;
+}
+
+float FASTCALL Detour_CCSPlayerPawn_GetMaxSpeed(CCSPlayerPawn* pPawn)
+{
+	auto flMaxSpeed = CCSPlayerPawn_GetMaxSpeed(pPawn);
+
+	const auto pController = reinterpret_cast<CCSPlayerController*>(pPawn->GetController());
+	if (const auto pPlayer = pController != nullptr ? pController->GetZEPlayer() : nullptr)
+	{
+		flMaxSpeed *= pPlayer->GetMaxSpeed();
+	}
+
+	return flMaxSpeed;
 }
 
 bool InitDetours(CGameConfig *gameConfig)
