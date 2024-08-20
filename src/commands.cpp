@@ -36,7 +36,6 @@
 #include "ctimer.h"
 #include "httpmanager.h"
 #include "discord.h"
-#include "zombiereborn.h"
 #include "tier0/vprof.h"
 #undef snprintf
 #include "vendor/nlohmann/json.hpp"

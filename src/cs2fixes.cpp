@@ -44,7 +44,6 @@
 #include "eventlistener.h"
 #include "gameconfig.h"
 #include "votemanager.h"
-#include "zombiereborn.h"
 #include "httpmanager.h"
 #include "idlemanager.h"
 #include "discord.h"
@@ -58,7 +57,6 @@
 #include "te.pb.h"
 #include "cs_gameevents.pb.h"
 #include "gameevents.pb.h"
-#include "leader.h"
 
 #include "tier0/memdbgon.h"
 
@@ -292,11 +290,9 @@ bool CS2Fixes::Load(PluginId id, ISmmAPI *ismm, char *error, size_t maxlen, bool
 	g_pAdminSystem = new CAdminSystem();
 	g_playerManager = new CPlayerManager(late);
 	g_pDiscordBotManager = new CDiscordBotManager();
-	g_pZRPlayerClassManager = new CZRPlayerClassManager();
 	g_pMapVoteSystem = new CMapVoteSystem();
 	g_pUserPreferencesSystem = new CUserPreferencesSystem();
 	g_pUserPreferencesStorage = new CUserPreferencesREST();
-	g_pZRWeaponConfig = new ZRWeaponConfig();
 	g_pEntityListener = new CEntityListener();
 	g_pIdleSystem = new CIdleSystem();
 	g_pPanoramaVoteHandler = new CPanoramaVoteHandler();
@@ -377,12 +373,6 @@ bool CS2Fixes::Unload(char *error, size_t maxlen)
 	if (g_GameConfig)
 		delete g_GameConfig;
 
-	if (g_pZRPlayerClassManager)
-		delete g_pZRPlayerClassManager;
-
-	if (g_pZRWeaponConfig)
-		delete g_pZRWeaponConfig;
-
 	if (g_pUserPreferencesSystem)
 		delete g_pUserPreferencesSystem;
 
@@ -407,87 +397,6 @@ bool CS2Fixes::Unload(char *error, size_t maxlen)
 void CS2Fixes::Hook_DispatchConCommand(ConCommandHandle cmdHandle, const CCommandContext& ctx, const CCommand& args)
 {
 	VPROF_BUDGET("CS2Fixes::Hook_DispatchConCommand", "ConCommands");
-
-	if (!g_pEntitySystem)
-		RETURN_META(MRES_IGNORED);
-
-	auto iCommandPlayerSlot = ctx.GetPlayerSlot();
-
-	if (!g_bEnableCommands)
-		RETURN_META(MRES_IGNORED);
-
-	bool bSay = !V_strcmp(args.Arg(0), "say");
-	bool bTeamSay = !V_strcmp(args.Arg(0), "say_team");
-
-	if (iCommandPlayerSlot != -1 && (bSay || bTeamSay))
-	{
-		auto pController = CCSPlayerController::FromSlot(iCommandPlayerSlot);
-		bool bGagged = pController && pController->GetZEPlayer()->IsGagged();
-		bool bFlooding = pController && pController->GetZEPlayer()->IsFlooding();
-		bool bAdminChat = bTeamSay && *args[1] == '@';
-		bool bSilent = *args[1] == '/' || bAdminChat;
-		bool bCommand = *args[1] == '!' || *args[1] == '/';
-
-		// Chat messages should generate events regardless
-		if (pController)
-		{
-			IGameEvent *pEvent = g_gameEventManager->CreateEvent("player_chat");
-
-			if (pEvent)
-			{
-				pEvent->SetBool("teamonly", bTeamSay);
-				pEvent->SetInt("userid", pController->GetPlayerSlot());
-				pEvent->SetString("text", args[1]);
-
-				g_gameEventManager->FireEvent(pEvent, true);
-			}
-		}
-
-		if (!bGagged && !bSilent && !bFlooding)
-		{
-			SH_CALL(g_pCVar, &ICvar::DispatchConCommand)(cmdHandle, ctx, args);
-		}
-		else if (bFlooding)
-		{
-			if (pController)
-				ClientPrint(pController, HUD_PRINTTALK, CHAT_PREFIX "You are flooding the server!");
-		}
-		else if (bAdminChat) // Admin chat can be sent by anyone but only seen by admins, use flood protection here too
-		{
-			// HACK: At this point, we can safely modify the arg buffer as it won't be passed anywhere else
-			// The string here is originally ("@foo bar"), trim it to be (foo bar)
-			char *pszMessage = (char*)(args.ArgS() + 2);
-			pszMessage[V_strlen(pszMessage) - 1] = 0;
-
-			for (int i = 0; i < gpGlobals->maxClients; i++)
-			{
-				ZEPlayer *pPlayer = g_playerManager->GetPlayer(i);
-
-				if (!pPlayer)
-					continue;
-
-				if (pPlayer->IsAdminFlagSet(ADMFLAG_GENERIC))
-					ClientPrint(CCSPlayerController::FromSlot(i), HUD_PRINTTALK, " \4(ADMINS) %s:\1 %s", pController->GetPlayerName(), pszMessage);
-				else if (i == iCommandPlayerSlot.Get()) // Sender is not an admin
-					ClientPrint(pController, HUD_PRINTTALK, " \4(TO ADMINS) %s:\1 %s", pController->GetPlayerName(), pszMessage);
-			}
-		}
-
-		// Finally, run the chat command if it is one, so anything will print after the player's message
-		if (bCommand)
-		{
-			// Do the same trimming as with admin chat
-			char *pszMessage = (char *)(args.ArgS() + 2);
-
-			// Host_Say at some point removes the trailing " for whatever reason, so we only remove if it was never called
-			if (bSilent)
-				pszMessage[V_strlen(pszMessage) - 1] = 0;
-
-			ParseChatCommand(pszMessage, pController);
-		}
-
-		RETURN_META(MRES_SUPERCEDE);
-	}
 
 	RETURN_META(MRES_IGNORED);
 }
@@ -544,54 +453,6 @@ void CS2Fixes::Hook_GameServerSteamAPIDeactivated()
 void CS2Fixes::Hook_PostEvent(CSplitScreenSlot nSlot, bool bLocalOnly, int nClientCount, const uint64* clients,
 	INetworkMessageInternal* pEvent, const CNetMessage* pData, unsigned long nSize, NetChannelBufType_t bufType)
 {
-	// Message( "Hook_PostEvent(%d, %d, %d, %lli)\n", nSlot, bLocalOnly, nClientCount, clients );
-	// Need to explicitly get a pointer to the right function as it's overloaded and SH_CALL can't resolve that
-	static void (IGameEventSystem::*PostEventAbstract)(CSplitScreenSlot, bool, int, const uint64 *,
-					INetworkMessageInternal *, const CNetMessage *, unsigned long, NetChannelBufType_t) = &IGameEventSystem::PostEventAbstract;
-
-	NetMessageInfo_t *info = pEvent->GetNetMessageInfo();
-
-	if (g_bEnableStopSound && info->m_MessageId == GE_FireBulletsId)
-	{
-		if (g_playerManager->GetSilenceSoundMask())
-		{
-			// Post the silenced sound to those who use silencesound
-			// Creating a new event object requires us to include the protobuf c files which I didn't feel like doing yet
-			// So instead just edit the event in place and reset later
-			auto msg = const_cast<CNetMessage*>(pData)->ToPB<CMsgTEFireBullets>();
-
-			int32_t weapon_id = msg->weapon_id();
-			int32_t sound_type = msg->sound_type();
-			int32_t item_def_index = msg->item_def_index();
-
-			// original weapon_id will override new settings if not removed
-			msg->set_weapon_id(0);
-			msg->set_sound_type(9);
-			msg->set_item_def_index(61); // weapon_usp_silencer
-
-			uint64 clientMask = *(uint64 *)clients & g_playerManager->GetSilenceSoundMask();
-
-			SH_CALL(g_gameEventSystem, PostEventAbstract)
-			(nSlot, bLocalOnly, nClientCount, &clientMask, pEvent, msg, nSize, bufType);
-
-			msg->set_weapon_id(weapon_id);
-			msg->set_sound_type(sound_type);
-			msg->set_item_def_index(item_def_index);
-		}
-
-		// Filter out people using stop/silence sound from the original event
-		*(uint64 *)clients &= ~g_playerManager->GetStopSoundMask();
-		*(uint64 *)clients &= ~g_playerManager->GetSilenceSoundMask();
-	}
-	else if (info->m_MessageId == TE_WorldDecalId)
-	{
-		*(uint64 *)clients &= ~g_playerManager->GetStopDecalsMask();
-	}
-	else if (info->m_MessageId == GE_Source1LegacyGameEvent)
-	{
-		if (g_bEnableLeader)
-			Leader_PostEventAbstract_Source1LegacyGameEvent(clients, pData);
-	}
 }
 
 void CS2Fixes::AllPluginsLoaded()
@@ -662,12 +523,6 @@ void CS2Fixes::Hook_ClientCommand( CPlayerSlot slot, const CCommand &args )
 		else
 			RETURN_META(MRES_SUPERCEDE);
 	}
-
-	if (g_bEnableZR && slot != -1 && !V_strncmp(args.Arg(0), "jointeam", 8))
-	{
-		ZR_Hook_ClientCommand_JoinTeam(slot, args);
-		RETURN_META(MRES_SUPERCEDE);
-	}
 }
 
 void CS2Fixes::Hook_ClientSettingsChanged( CPlayerSlot slot )
@@ -700,9 +555,6 @@ void CS2Fixes::Hook_ClientPutInServer( CPlayerSlot slot, char const *pszName, in
 {
 	Message( "Hook_ClientPutInServer(%d, \"%s\", %d, %d, %lli)\n", slot, pszName, type, xuid );
 	g_playerManager->OnClientPutInServer(slot);
-
-	if (g_bEnableZR)
-		ZR_Hook_ClientPutInServer(slot, pszName, type, xuid);
 }
 
 void CS2Fixes::Hook_ClientDisconnect( CPlayerSlot slot, ENetworkDisconnectionReason reason, const char *pszName, uint64 xuid, const char *pszNetworkID )
@@ -757,9 +609,6 @@ void CS2Fixes::Hook_GameFramePost(bool simulating, bool bFirstTick, bool bLastTi
 			}
 		}
 	}
-
-	if (g_bEnableZR)
-		CZRRegenTimer::Tick();
 
     EntityHandler_OnGameFramePost(simulating, gpGlobals->tickcount);
 }
@@ -863,9 +712,6 @@ bool CS2Fixes::Hook_OnTakeDamage_Alive(CTakeDamageInfoContainer *pInfoContainer)
 {
 	CCSPlayerPawn *pPawn = META_IFACEPTR(CCSPlayerPawn);
 
-	if (g_bEnableZR && ZR_Hook_OnTakeDamage_Alive(pInfoContainer->pInfo, pPawn))
-		RETURN_META_VALUE(MRES_SUPERCEDE, false);
-
 	// This is a shit place to be doing this, but player_death event is too late and there is no pre-hook alternative
 	// Check if this is going to kill the player
 	if (g_bDropMapWeapons && pPawn && pPawn->m_iHealth() <= 0)
@@ -925,8 +771,6 @@ void CS2Fixes::OnLevelInit( char const *pMapName,
 	g_playerManager->SetupInfiniteAmmo();
 	g_pMapVoteSystem->OnLevelInit(pMapName);
 
-	if (g_bEnableZR)
-		ZR_OnLevelInit();
 }
 
 // Potentially might not work

@@ -21,9 +21,7 @@
 #include "gameconfig.h"
 #include "addresses.h"
 #include "gamesystem.h"
-#include "zombiereborn.h"
 #include "playermanager.h"
-#include "leader.h"
 #include "adminsystem.h"
 #include "entities.h"
 #include "tier0/vprof.h"
@@ -78,9 +76,7 @@ GS_EVENT_MEMBER(CGameSystem, BuildGameSessionManifest)
 	// Any resource adding MUST be done here, the resource manifest is not long-lived
 	// pResourceManifest->AddResource("characters/models/my_character_model.vmdl");
 
-	ZR_Precache(pResourceManifest);
 	PrecacheBeaconParticle(pResourceManifest);
-	Leader_Precache(pResourceManifest);
 
 	pResourceManifest->AddResource(g_sBurnParticle.c_str());
 }
