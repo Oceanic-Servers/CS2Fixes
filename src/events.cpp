@@ -25,9 +25,7 @@
 #include "networkstringtabledefs.h"
 #include "entity/cbaseplayercontroller.h"
 #include "entity/cgamerules.h"
-#include "zombiereborn.h"
 #include "votemanager.h"
-#include "leader.h"
 #include "recipientfilters.h"
 #include "panoramavote.h"
 
@@ -99,9 +97,6 @@ GAME_EVENT_F(round_prestart)
 			//FullUpdateAllClients();
 		}
 	}
-
-	if (g_bEnableZR)
-		ZR_OnRoundPrestart(pEvent);
 }
 
 static bool g_bBlockTeamMessages = false;
@@ -131,9 +126,6 @@ GAME_EVENT_F(player_spawn)
 	// always reset when player spawns
 	if (pPlayer)
 		pPlayer->SetMaxSpeed(1.f);
-
-	if (g_bEnableZR)
-		ZR_OnPlayerSpawn(pController);
 
 	if (pController->IsConnected())
 		pController->GetZEPlayer()->OnSpawn();
@@ -170,9 +162,6 @@ FAKE_BOOL_CVAR(cs2f_topdefender_enable, "Whether to use TopDefender", g_bEnableT
 
 GAME_EVENT_F(player_hurt)
 {
-	if (g_bEnableZR)
-		ZR_OnPlayerHurt(pEvent);
-
 	if (!g_bEnableTopDefender)
 		return;
 
@@ -194,9 +183,6 @@ GAME_EVENT_F(player_hurt)
 
 GAME_EVENT_F(player_death)
 {
-	if (g_bEnableZR)
-		ZR_OnPlayerDeath(pEvent);
-
 	if (!g_bEnableTopDefender)
 		return;
 
@@ -221,12 +207,6 @@ FAKE_BOOL_CVAR(cs2f_full_alltalk, "Whether to enforce sv_full_alltalk 1", g_bFul
 GAME_EVENT_F(round_start)
 {
 	g_pPanoramaVoteHandler->Init();
-
-	if (g_bEnableZR)
-		ZR_OnRoundStart(pEvent);
-
-	if (g_bEnableLeader)
-		Leader_OnRoundStart(pEvent);
 
 	// Dumb workaround for CS2 always overriding sv_full_alltalk on state changes
 	if (g_bFullAllTalk)
@@ -314,24 +294,6 @@ GAME_EVENT_F(round_end)
 		pPlayer->SetTotalHits(0);
 		pPlayer->SetTotalKills(0);
 	}
-}
-
-GAME_EVENT_F(round_freeze_end)
-{
-	if (g_bEnableZR)
-		ZR_OnRoundFreezeEnd(pEvent);
-}
-
-GAME_EVENT_F(round_time_warning)
-{
-	if (g_bEnableZR)
-		ZR_OnRoundTimeWarning(pEvent);
-}
-
-GAME_EVENT_F(bullet_impact)
-{
-	if (g_bEnableLeader)
-		Leader_BulletImpact(pEvent);
 }
 
 GAME_EVENT_F(vote_cast)

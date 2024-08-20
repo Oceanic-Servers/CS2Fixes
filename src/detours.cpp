@@ -33,18 +33,18 @@
 #include "entity/ccsplayerpawn.h"
 #include "entity/cbasemodelentity.h"
 #include "entity/ccsweaponbase.h"
-#include "entity/cenvhudhint.h"
 #include "entity/ctriggerpush.h"
 #include "entity/cgamerules.h"
 #include "entity/ctakedamageinfo.h"
+#include "entity/cenvmessage.h"
 #include "entity/services.h"
 #include "playermanager.h"
 #include "igameevents.h"
 #include "gameconfig.h"
-#include "zombiereborn.h"
 #include "customio.h"
 #include "entities.h"
 #include "serversideclient.h"
+#include "recipientfilters.h"
 #include "networksystem/inetworkserializer.h"
 #include "map_votes.h"
 #include "tier0/vprof.h"
@@ -73,7 +73,6 @@ DECLARE_DETOUR(ProcessUsercmds, Detour_ProcessUsercmds);
 DECLARE_DETOUR(CGamePlayerEquip_InputTriggerForAllPlayers, Detour_CGamePlayerEquip_InputTriggerForAllPlayers);
 DECLARE_DETOUR(CGamePlayerEquip_InputTriggerForActivatedPlayer, Detour_CGamePlayerEquip_InputTriggerForActivatedPlayer);
 DECLARE_DETOUR(CCSGameRules_GoToIntermission, Detour_CCSGameRules_GoToIntermission);
-DECLARE_DETOUR(GetFreeClient, Detour_GetFreeClient);
 DECLARE_DETOUR(CCSPlayerPawn_GetMaxSpeed, Detour_CCSPlayerPawn_GetMaxSpeed);
 
 void FASTCALL Detour_CGameRules_Constructor(CGameRules *pThis)
@@ -311,11 +310,6 @@ void FASTCALL Detour_UTIL_SayText2Filter(
 
 bool FASTCALL Detour_CCSPlayer_WeaponServices_CanUse(CCSPlayer_WeaponServices *pWeaponServices, CBasePlayerWeapon* pPlayerWeapon)
 {
-	if (g_bEnableZR && !ZR_Detour_CCSPlayer_WeaponServices_CanUse(pWeaponServices, pPlayerWeapon))
-	{
-		return false;
-	}
-
 	return CCSPlayer_WeaponServices_CanUse(pWeaponServices, pPlayerWeapon);
 }
 
@@ -323,8 +317,22 @@ bool FASTCALL Detour_CEntityIdentity_AcceptInput(CEntityIdentity* pThis, CUtlSym
 {
 	VPROF_SCOPE_BEGIN("Detour_CEntityIdentity_AcceptInput");
 
-	if (g_bEnableZR)
-		ZR_Detour_CEntityIdentity_AcceptInput(pThis, pInputName, pActivator, pCaller, value, nOutputID);
+	// Special case for ShowMessage.
+	if (!V_strnicmp(pInputName->String(), "ShowMessage", 11))
+	{
+		CMessage* pEnvMessage = reinterpret_cast<CMessage*>(pThis->m_pInstance);
+		CCSPlayerPawn* pPawn = reinterpret_cast<CCSPlayerPawn*>(pActivator);
+
+		if (pPawn->IsPawn())
+		{
+			CCSPlayerController* pController = pPawn->GetOriginalController();
+			if (pController->IsController())
+			{
+				ClientPrint(pController, HUD_PRINTCENTER, pEnvMessage->m_iszMessage);
+			}
+		}
+		return true;
+	}
 
 	// Handle KeyValue(s)
 	if (!V_strnicmp(pInputName->String(), "KeyValue", 8))
@@ -365,17 +373,6 @@ bool FASTCALL Detour_CEntityIdentity_AcceptInput(CEntityIdentity* pThis, CUtlSym
 		if (pPawn->IsPawn() && pPawn->GetOriginalController())
 		{
 			pPawn->GetOriginalController()->AddScore(iScore);
-			return true;
-		}
-	}
-    else if (!V_strcasecmp(pInputName->String(), "SetMessage"))
-	{
-		if (const auto pHudHint = reinterpret_cast<CBaseEntity*>(pThis->m_pInstance)->AsHudHint())
-		{
-			if ((value->m_type == FIELD_CSTRING || value->m_type == FIELD_STRING) && value->m_pszString)
-			{
-				pHudHint->m_iszMessage(GameEntitySystem()->AllocPooledString(value->m_pszString));
-			}
 			return true;
 		}
 	}
@@ -439,7 +436,6 @@ FAKE_BOOL_CVAR(cs2f_disable_subtick_move, "Whether to disable subtick movement",
 class CUserCmd
 {
 public:
-	[[maybe_unused]] char pad0[0x10];
 	CSGOUserCmdPB cmd;
 	[[maybe_unused]] char pad1[0x38];
 #ifdef PLATFORM_WINDOWS
@@ -447,20 +443,27 @@ public:
 #endif
 };
 
-void* FASTCALL Detour_ProcessUsercmds(CCSPlayerController *pController, CUserCmd *cmds, int numcmds, bool paused, float margin)
+void* FASTCALL Detour_ProcessUsercmds(CBasePlayerPawn *pPawn, CUserCmd *cmds, int numcmds, bool paused, float margin)
 {
 	// Push fix only works properly if subtick movement is also disabled
 	if (!g_bDisableSubtick && !g_bUseOldPush)
-		return ProcessUsercmds(pController, cmds, numcmds, paused, margin);
+		return ProcessUsercmds(pPawn, cmds, numcmds, paused, margin);
 
 	VPROF_SCOPE_BEGIN("Detour_ProcessUsercmds");
 
+	static int offset = g_GameConfig->GetOffset("UsercmdOffset");
+
 	for (int i = 0; i < numcmds; i++)
-		cmds[i].cmd.mutable_base()->mutable_subtick_moves()->Clear();
+	{
+		CSGOUserCmdPB *pUserCmd = &cmds[i].cmd;
+
+		for (int j = 0; j < pUserCmd->mutable_base()->subtick_moves_size(); j++)
+			pUserCmd->mutable_base()->mutable_subtick_moves(j)->set_when(0.f);
+	}
 
 	VPROF_SCOPE_END();
 
-	return ProcessUsercmds(pController, cmds, numcmds, paused, margin);
+	return ProcessUsercmds(pPawn, cmds, numcmds, paused, margin);
 }
 
 void FASTCALL Detour_CGamePlayerEquip_InputTriggerForAllPlayers(CGamePlayerEquip* pEntity, InputData_t* pInput)
@@ -480,25 +483,6 @@ int64_t* FASTCALL Detour_CCSGameRules_GoToIntermission(int64_t unk1, char unk2)
 		return nullptr;
 
 	return CCSGameRules_GoToIntermission(unk1, unk2);
-}
-
-CServerSideClient* FASTCALL Detour_GetFreeClient(int64_t unk1, const __m128i* unk2, unsigned int unk3, int64_t unk4, char unk5, void* unk6)
-{
-	// Check if there is still unused slots, this should never break so just fall back to original behaviour for ease (we don't have a CServerSideClient constructor)
-	if (gpGlobals->maxClients != GetClientList()->Count())
-		return GetFreeClient(unk1, unk2, unk3, unk4, unk5, unk6);
-
-	// Phantom client fix
-	for (int i = 0; i < GetClientList()->Count(); i++)
-	{
-		CServerSideClient* pClient = (*GetClientList())[i];
-
-		if (pClient && pClient->GetSignonState() < SIGNONSTATE_CONNECTED)
-			return pClient;
-	}
-
-	// Server is actually full for real
-	return nullptr;
 }
 
 float FASTCALL Detour_CCSPlayerPawn_GetMaxSpeed(CCSPlayerPawn* pPawn)

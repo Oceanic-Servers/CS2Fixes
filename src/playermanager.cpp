@@ -31,7 +31,6 @@
 #include "recipientfilters.h"
 #include "ctimer.h"
 #include "ctime"
-#include "leader.h"
 #include "tier0/vprof.h"
 #include "networksystem/inetworkmessages.h"
 
@@ -341,12 +340,6 @@ void ZEPlayer::EndBeacon()
 
 void ZEPlayer::SetLeader(int leaderIndex)
 {
-	if (leaderIndex >= g_nLeaderColorMapSize)
-	{
-		m_iLeaderIndex = g_iLeaderIndex = 1;
-		return;
-	}
-
 	m_iLeaderIndex = leaderIndex;
 }
 
